@@ -115,14 +115,6 @@ async fn subscribe_returns_a_400_when_fields_are_present_but_invalid() {
             description
         )
     }
-
-    // let saved = sqlx::query!("SELECT email, name FROM subscriptions",)
-    //     .fetch_one(&app.db_pool)
-    //     .await
-    //     .expect("Failed to fetch saved subscriptions.");
-    //
-    // assert_eq!(saved.email, "ursula_le_guin@gmail.com");
-    // assert_eq!(saved.name, "le guin");
 }
 
 #[tokio::test]
