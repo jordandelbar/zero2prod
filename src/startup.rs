@@ -9,6 +9,8 @@ use sqlx::PgPool;
 use std::net::TcpListener;
 use tracing_actix_web::TracingLogger;
 
+pub struct ApplicationBaseUrl(pub String);
+
 pub struct Application {
     port: u16,
     server: Server,
@@ -60,8 +62,6 @@ pub fn get_connection_pool(configuration: &DatabaseSettings) -> PgPool {
         .acquire_timeout(std::time::Duration::from_secs(2))
         .connect_lazy_with(configuration.with_db())
 }
-
-pub struct ApplicationBaseUrl(pub String);
 
 pub fn run(
     listener: TcpListener,
