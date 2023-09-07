@@ -28,6 +28,7 @@ secrecy = { version = "0.8", features = ["serde"] }
 unicode-segmentation = "1"
 validator = "0.16"
 rand = { version = "0.8", features = ["std_rng"] }
+thiserror = "1"
 
 [dependencies.sqlx]
 version = "0.6"
@@ -54,4 +55,3 @@ quickcheck = "0.9"
 quickcheck_macros = "0.9.1"
 wiremock = "0.5"
 linkify = "0.9"
-
