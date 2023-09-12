@@ -1,18 +1,17 @@
-use actix_web::http::header::{HeaderMap, HeaderValue};
-use actix_web::http::{header, StatusCode};
-use actix_web::web;
-use actix_web::HttpRequest;
-use actix_web::HttpResponse;
-use actix_web::ResponseError;
-use anyhow::Context;
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
-use base64::Engine;
-use secrecy::{ExposeSecret, Secret};
-use sqlx::PgPool;
-
-use crate::domain::SubscriberEmail;
+use crate::authentication::{validate_credentials, Credentials};
 use crate::email_client::EmailClient;
 use crate::routes::error_chain_fmt;
+use crate::{authentication::AuthError, domain::SubscriberEmail};
+
+use actix_web::http::{
+    header::{HeaderMap, HeaderValue},
+    StatusCode,
+};
+use actix_web::{web, HttpRequest, HttpResponse, ResponseError};
+use anyhow::Context;
+use base64::Engine;
+use secrecy::Secret;
+use sqlx::PgPool;
 
 #[derive(serde::Deserialize)]
 pub struct BodyData {
@@ -26,29 +25,21 @@ pub struct Content {
     text: String,
 }
 
-struct ConfirmedSubscriber {
-    email: SubscriberEmail,
-}
-
-struct Credentials {
-    username: String,
-    password: Secret<String>,
-}
-
-fn basic_authentication(headers: &HeaderMap) -> Result<Credentials, anyhow::Error> {
+pub fn basic_authentication(headers: &HeaderMap) -> Result<Credentials, anyhow::Error> {
+    // The header value, if present, must be a valid UTF8 string
     let header_value = headers
         .get("Authorization")
-        .context("The 'Authorization' header was missing.")?
+        .context("The 'Authorization' header was missing")?
         .to_str()
         .context("The 'Authorization' header was not a valid UTF8 string.")?;
-    let base64encoded_segment = header_value
+    let base64encoded_credentials = header_value
         .strip_prefix("Basic ")
         .context("The authorization scheme was not 'Basic'.")?;
-    let decoded_bytes = base64::engine::general_purpose::STANDARD
-        .decode(base64encoded_segment)
+    let decoded_credentials = base64::engine::general_purpose::STANDARD
+        .decode(base64encoded_credentials)
         .context("Failed to base64-decode 'Basic' credentials.")?;
-    let decoded_credentials =
-        String::from_utf8(decoded_bytes).context("The decoded credentials is not valid UTF8.")?;
+    let decoded_credentials = String::from_utf8(decoded_credentials)
+        .context("The decoded credential string is valid UTF8.")?;
 
     let mut credentials = decoded_credentials.splitn(2, ':');
     let username = credentials
@@ -66,114 +57,9 @@ fn basic_authentication(headers: &HeaderMap) -> Result<Credentials, anyhow::Erro
     })
 }
 
-async fn validate_credentials(
-    credentials: Credentials,
-    pool: &PgPool,
-) -> Result<uuid::Uuid, PublishError> {
-    let row: Option<_> = sqlx::query!(
-        r#"
-    SELECT user_id, password_hash
-    FROM users
-    WHERE username = $1
-    "#,
-        credentials.username,
-    )
-    .fetch_optional(pool)
-    .await
-    .context("Failed to perform a query to retrieve stored credentials.")
-    .map_err(PublishError::UnexpectedError)?;
-
-    let (expected_password_hash, user_id) = match row {
-        Some(row) => (row.password_hash, row.user_id),
-        None => {
-            return Err(PublishError::AuthError(anyhow::anyhow!(
-                "Unknown username."
-            )));
-        }
-    };
-
-    let expected_password_hash = PasswordHash::new(&expected_password_hash)
-        .context("Failed to parse hash in PHC string format.")
-        .map_err(PublishError::UnexpectedError)?;
-
-    Argon2::default()
-        .verify_password(
-            credentials.password.expose_secret().as_bytes(),
-            &expected_password_hash,
-        )
-        .context("Invalid password.")
-        .map_err(PublishError::AuthError)?;
-    Ok(user_id)
-}
-
-#[tracing::instrument(
-    name = "Publish a newsletter issue",
-    skip(body, pool, email_client, request),
-    fields(username=tracing::field::Empty, user_id=tracing::field::Empty),
-)]
-pub async fn publish_newsletter(
-    body: web::Json<BodyData>,
-    pool: web::Data<PgPool>,
-    email_client: web::Data<EmailClient>,
-    request: HttpRequest,
-) -> Result<HttpResponse, PublishError> {
-    let credentials = basic_authentication(request.headers()).map_err(PublishError::AuthError)?;
-    tracing::Span::current().record("username", &tracing::field::display(&credentials.username));
-    let user_id = validate_credentials(credentials, &pool).await?;
-    tracing::Span::current().record("user_id", &tracing::field::display(&user_id));
-    let subscribers = get_confirmed_subscribers(&pool).await?;
-    for subscriber in subscribers {
-        match subscriber {
-            Ok(subscriber) => {
-                email_client
-                    .send_email(
-                        &subscriber.email,
-                        &body.title,
-                        &body.content.html,
-                        &body.content.text,
-                    )
-                    .await
-                    .with_context(|| {
-                        format!("Failed to send newsletter issue to {}", subscriber.email)
-                    })?;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error.cause_chain = ?error,
-                    "Skipping a confirmed subscriber. \
-                    Their stored contact details are invalid.",
-                )
-            }
-        }
-    }
-    Ok(HttpResponse::Ok().finish())
-}
-
-#[tracing::instrument(name = "Get confirmed subscribers", skip(pool))]
-async fn get_confirmed_subscribers(
-    pool: &PgPool,
-) -> Result<Vec<Result<ConfirmedSubscriber, anyhow::Error>>, anyhow::Error> {
-    let confirmed_subscribers = sqlx::query!(
-        r#"
-        SELECT email
-        FROM subscriptions
-        WHERE status = 'confirmed'
-        "#,
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|r| match SubscriberEmail::parse(r.email) {
-        Ok(email) => Ok(ConfirmedSubscriber { email }),
-        Err(error) => Err(anyhow::anyhow!(error)),
-    })
-    .collect();
-    Ok(confirmed_subscribers)
-}
-
 #[derive(thiserror::Error)]
 pub enum PublishError {
-    #[error("Authentication failed.")]
+    #[error("Authentication failed")]
     AuthError(#[source] anyhow::Error),
     #[error(transparent)]
     UnexpectedError(#[from] anyhow::Error),
@@ -196,9 +82,85 @@ impl ResponseError for PublishError {
                 let header_value = HeaderValue::from_str(r#"Basic realm="publish""#).unwrap();
                 response
                     .headers_mut()
-                    .insert(header::WWW_AUTHENTICATE, header_value);
+                    .insert(actix_web::http::header::WWW_AUTHENTICATE, header_value);
                 response
             }
         }
     }
+}
+
+#[tracing::instrument(
+name = "Publish a newsletter issue", 
+    skip(body, pool, email_client, request),
+    fields(username=tracing::field::Empty, user_id=tracing::field::Empty)
+)]
+pub async fn publish_newsletter(
+    body: web::Json<BodyData>,
+    pool: web::Data<PgPool>,
+    email_client: web::Data<EmailClient>,
+    request: HttpRequest,
+) -> Result<HttpResponse, PublishError> {
+    let credentials = basic_authentication(request.headers()).map_err(PublishError::AuthError)?;
+    tracing::Span::current().record("username", &tracing::field::display(&credentials.username));
+    let user_id = validate_credentials(credentials, &pool)
+        .await
+        .map_err(|e| match e {
+            AuthError::InvalidCredentials(_) => PublishError::AuthError(e.into()),
+            AuthError::UnexpectedError(_) => PublishError::UnexpectedError(e.into()),
+        })?;
+
+    tracing::Span::current().record("user_id", &tracing::field::display(&user_id));
+
+    let subscribers = get_confirmed_subscribers(&pool).await?;
+    for subscriber in subscribers {
+        match subscriber {
+            Ok(subscriber) => {
+                email_client
+                    .send_email(
+                        &subscriber.email,
+                        &body.title,
+                        &body.content.html,
+                        &body.content.text,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!("Failed to send newsletter issue to {}", subscriber.email)
+                    })?;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error.cause_chain = ?error,
+                    "Skipping a confirmed subscriber. \
+                    Their stored contact details are invalid",
+                );
+            }
+        }
+    }
+    Ok(HttpResponse::Ok().finish())
+}
+
+struct ConfirmedSubscriber {
+    email: SubscriberEmail,
+}
+
+#[tracing::instrument(name = "Get confirmed subscribers", skip(pool))]
+async fn get_confirmed_subscribers(
+    pool: &PgPool,
+) -> Result<Vec<Result<ConfirmedSubscriber, anyhow::Error>>, anyhow::Error> {
+    let confirmed_subscribers = sqlx::query!(
+        r#"
+        SELECT email
+        FROM subscriptions
+        WHERE status = 'confirmed'
+        "#,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| match SubscriberEmail::parse(r.email) {
+        Ok(email) => Ok(ConfirmedSubscriber { email }),
+        Err(error) => Err(anyhow::anyhow!(error)),
+    })
+    .collect();
+    Ok(confirmed_subscribers)
 }
