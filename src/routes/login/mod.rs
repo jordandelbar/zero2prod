@@ -1,2 +1,2 @@
-mod post;
-pub use post::login_form;
+mod get;
+pub use get::login_form;
