@@ -57,6 +57,73 @@ impl TestApp {
             .expect("Failed to execute request.")
     }
 
+    pub async fn post_login<Body>(&self, body: &Body) -> reqwest::Response
+    where
+        Body: serde::Serialize,
+    {
+        self.api_client
+            .post(&format!("{}/login", &self.address))
+            .form(body)
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    pub async fn get_login_html(&self) -> String {
+        self.api_client
+            .get(&format!("{}/login", &self.address))
+            .send()
+            .await
+            .expect("Failed to execute request.")
+            .text()
+            .await
+            .unwrap()
+    }
+
+    pub async fn get_admin_dashboard(&self) -> reqwest::Response {
+        self.api_client
+            .get(&format!("{}/admin/dashboard", &self.address))
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    pub async fn get_admin_dashboard_html(&self) -> String {
+        self.get_admin_dashboard().await.text().await.unwrap()
+    }
+
+    pub async fn get_change_password(&self) -> reqwest::Response {
+        self.api_client
+            .get(&format!("{}/admin/password", &self.address))
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    pub async fn get_change_password_html(&self) -> String {
+        self.get_change_password().await.text().await.unwrap()
+    }
+
+    pub async fn post_logout(&self) -> reqwest::Response {
+        self.api_client
+            .post(&format!("{}/admin/logout", &self.address))
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
+    pub async fn post_change_password<Body>(&self, body: &Body) -> reqwest::Response
+    where
+        Body: serde::Serialize,
+    {
+        self.api_client
+            .post(&format!("{}/admin/password", &self.address))
+            .form(body)
+            .send()
+            .await
+            .expect("Failed to execute request.")
+    }
+
     /// Extract the confirmation links embedded in the request to the email API.
     pub fn get_confirmation_links(&self, email_request: &wiremock::Request) -> ConfirmationLinks {
         let body: serde_json::Value = serde_json::from_slice(&email_request.body).unwrap();
@@ -79,31 +146,6 @@ impl TestApp {
         let html = get_link(body["HtmlBody"].as_str().unwrap());
         let plain_text = get_link(body["TextBody"].as_str().unwrap());
         ConfirmationLinks { html, plain_text }
-    }
-
-    pub async fn post_login<Body>(&self, body: &Body) -> reqwest::Response
-    where
-        Body: serde::Serialize,
-    {
-        self.api_client
-            .post(&format!("{}/login", &self.address))
-            // This `reqwest` method makes sure that the body is URL-encoded
-            // and the `Content-Type` header is set accordingly
-            .form(body)
-            .send()
-            .await
-            .expect("Failed to execute request.")
-    }
-
-    pub async fn get_login_html(&self) -> String {
-        self.api_client
-            .get(&format!("{}/login", &self.address))
-            .send()
-            .await
-            .expect("Failed to execute request.")
-            .text()
-            .await
-            .unwrap()
     }
 }
 
@@ -220,5 +262,5 @@ impl TestUser {
 
 pub fn assert_is_redirect_to(response: &reqwest::Response, location: &str) {
     assert_eq!(response.status().as_u16(), 303);
-    assert_eq!(response.headers().get("Location").unwrap(), location)
+    assert_eq!(response.headers().get("Location").unwrap(), location);
 }
