@@ -41,7 +41,7 @@ pub async fn login(
                 AuthError::UnexpectedError(_) => LoginError::UnexpectedError(e.into()),
             };
             let response = HttpResponse::SeeOther()
-                .insert_header((LOCATION, format!("/login")))
+                .insert_header((LOCATION, "/login"))
                 .finish();
             Err(InternalError::from_response(e, response))
         }
