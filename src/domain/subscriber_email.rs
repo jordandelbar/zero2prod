@@ -8,7 +8,7 @@ impl SubscriberEmail {
         if validate_email(&s) {
             Ok(Self(s))
         } else {
-            Err(format!("{} is not a valid subscriber email", s))
+            Err(format!("{} is not a valid subscriber email.", s))
         }
     }
 }
@@ -50,8 +50,8 @@ mod tests {
         assert_err!(SubscriberEmail::parse(email));
     }
 
-    #[derive(Clone, Debug)]
-    struct ValidEmailFixture(String);
+    #[derive(Debug, Clone)]
+    struct ValidEmailFixture(pub String);
 
     impl quickcheck::Arbitrary for ValidEmailFixture {
         fn arbitrary<G: quickcheck::Gen>(g: &mut G) -> Self {
@@ -61,8 +61,7 @@ mod tests {
     }
 
     #[quickcheck_macros::quickcheck]
-    fn valid_emails_are_parsed_successfully(fixture: ValidEmailFixture) -> bool {
-        let email = fixture.0;
-        SubscriberEmail::parse(email).is_ok()
+    fn valid_emails_are_parsed_successfully(valid_email: ValidEmailFixture) -> bool {
+        SubscriberEmail::parse(valid_email.0).is_ok()
     }
 }
